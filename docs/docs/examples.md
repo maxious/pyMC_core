@@ -25,6 +25,9 @@ All examples support multiple radio types via `--radio-type` argument:
 - **uconsole**: ClockworkPi uConsole LoRa module
 - **meshadv-mini**: MeshAdviser Mini board
 
+### SX1276 Direct Radio
+- **dragino-lora-gps**: Dragino LoRa/GPS HAT (SX1276) for Raspberry Pi
+
 ### KISS TNC
 - **kiss-tnc**: Serial KISS TNC devices (MeshTNC)
 
@@ -104,6 +107,22 @@ python examples/send_direct_advert.py --radio-type meshadv-mini
 python examples/ping_repeater_trace.py --radio-type waveshare
 ```
 
+### SX1276 Direct Radio Examples
+
+```bash
+# Send tracked advert with Dragino LoRa/GPS HAT
+python examples/send_tracked_advert.py --radio-type dragino-lora-gps
+
+# Send text message via Dragino HAT
+python examples/send_text_message.py --radio-type dragino-lora-gps
+
+# Monitor/packet sniff with Dragino HAT
+python examples/monitor.py --radio-type dragino-lora-gps
+
+# Stream packets to Wireshark via Dragino HAT
+python examples/wireshark_stream.py --radio-type dragino-lora-gps
+```
+
 ### KISS TNC Examples
 
 ```bash
@@ -156,6 +175,17 @@ pyMC_Core supports both direct SX1262 radio control and KISS TNC devices:
 - **SPI Bus**: SPI0
 - **GPIO Pins**: CS=8, Reset=24, Busy=20, IRQ=16
 
+#### Dragino LoRa/GPS HAT (SX1276)
+- **Hardware**: Dragino LoRa/GPS HAT
+- **Platform**: Raspberry Pi (or compatible single-board computer)
+- **Frequency**: 433/868/915 MHz (pre-configured variant)
+- **TX Power**: Up to 20dBm
+- **SPI Bus**: SPI0
+- **Chip**: SX1276/SX1278 (Semtech LoRa)
+- **GPS**: L80 GPS (MT3339) on UART
+- **GPIO Pins**: CS=25 (manual, not hardware CE), Reset=17, DIO0=4, DIO1=23
+- **Note**: CS uses manual GPIO toggling (BCM 25) because the Dragino HAT connects nSS to GPIO 25, not the hardware CE0/CE1 pins
+
 ### Default Pin Configurations
 
 #### Waveshare HAT
@@ -187,6 +217,18 @@ pyMC_Core supports both direct SX1262 radio control and KISS TNC devices:
 - IRQ Pin: GPIO 16
 - TX Enable: Not used (-1)
 - RX Enable: GPIO 12
+
+#### Dragino LoRa/GPS HAT
+- **Radio Type**: SX1276 direct hardware control (LoRaRF SX127x driver)
+- **SPI Bus**: 0
+- **CS ID**: 0
+- **CS Pin**: GPIO 25 (manual CS — the Dragino HAT does not connect CE0/CE1)
+- **Reset Pin**: GPIO 17
+- **DIO0 Pin**: GPIO 4
+- **DIO1 Pin**: GPIO 23
+- **TX/RX Enable**: Not used (-1)
+- **PA Pin**: PA_BOOST (high-power output)
+- **GPS**: UART on BCM 14 (TXD) / 15 (RXD), PPS on BCM 18
 
 ### KISS TNC Hardware
 
@@ -232,6 +274,13 @@ pip install pymc_core
 pip install pymc_core[hardware]
 # or manually:
 pip install gpiozero lgpio
+```
+
+**For SX1276 Direct Radio (Dragino HAT):**
+```bash
+pip install pymc_core[hardware]
+# gpiod v2 backend for non-Pi SBCs (optional):
+pip install pymc_core[gpiod]
 ```
 
 **For KISS TNC:**
@@ -335,6 +384,22 @@ All examples use the SX1262 LoRa radio with the following default settings:
 - **IRQ Pin**: GPIO 16
 - **TX Enable**: Not used (-1)
 - **RX Enable**: GPIO 12
+
+### Dragino LoRa/GPS HAT Configuration (AU Mid)
+- **Radio Type**: SX1276 direct hardware control
+- **Frequency**: 915.075MHz (AU Mid)
+- **TX Power**: 17dBm
+- **Spreading Factor**: 9
+- **Bandwidth**: 125kHz
+- **Coding Rate**: 4/5
+- **Preamble Length**: 12
+- **Sync Word**: 0x34
+- **SPI Bus**: 0
+- **CS Pin**: GPIO 25 (manual GPIO toggling)
+- **Reset Pin**: GPIO 17
+- **DIO0 Pin**: GPIO 4
+- **DIO1 Pin**: GPIO 23
+- **GPS**: NMEA via UART (BCM 14/15), PPS on BCM 18
 
 ### KISS TNC Configuration
 - **Radio Type**: KISS Serial Protocol over TNC device
@@ -520,6 +585,23 @@ sudo apt install python3-rpi.lgpio
 # Remove old GPIO library if present
 sudo apt remove python3-rpi.gpio
 ```
+
+### SX1276 (Dragino HAT) Issues
+
+**Chip Not Detected:**
+- The SX1276 boots in SLEEP mode — SPI reads don't work until `begin()` writes STDBY
+- If `begin()` returns False, try a full power cycle (unplug power, not just reboot)
+- The 3.3V rail stays active during a reboot — the HAT's chip state persists
+
+**Manual CS Pin:**
+- The Dragino HAT connects nSS to BCM GPIO 25, not the SPI hardware CE0/CE1
+- Manual GPIO toggling is used for chip select — this is handled automatically by the driver
+- Ensure GPIO 25 is not claimed by other drivers (check for SPI overlay conflicts)
+
+**GPS Setup:**
+- GPS uses UART on BCM 14 (TXD) / 15 (RXD)
+- Install gpsd: `sudo apt install gpsd gpsd-clients`
+- Configure for the serial UART on the Pi
 
 ### KISS TNC Issues
 

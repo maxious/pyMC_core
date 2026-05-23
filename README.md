@@ -79,10 +79,11 @@ For examples, see the [documentation](https://pymc-dev.github.io/pyMC_core/examp
 - **Waveshare SX1262 LoRaWAN/GNSS HAT** - Popular Raspberry Pi LoRa module
 - **HackerGadgets uConsole** - All-in-one extension board with LoRa support
 - **FrequencyLabs meshadv-mini** - Raspberry Pi hat with E22-900M22S LoRa module
+- **Dragino LoRa/GPS HAT** - Raspberry Pi HAT with SX1276 LoRa and L80 GPS (MT3339)
 
 ### Requirements
 - Raspberry Pi (or compatible SBC)
-- SX1262 LoRa module
+- SX1262 or SX1276 LoRa module / HAT
 - SPI interface enabled
 - Python 3.8+
 

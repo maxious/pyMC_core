@@ -19,6 +19,9 @@ All examples support multiple radio types via `--radio-type` argument:
 - **uconsole**: ClockworkPi uConsole LoRa module
 - **meshadv-mini**: MeshAdviser Mini board
 
+### Direct Radio (SX1276)
+- **dragino-lora-gps**: Dragino LoRa/GPS HAT (SX1276) for Raspberry Pi
+
 ### KISS TNC
 - **kiss-tnc**: Serial KISS TNC devices (MeshTNC)
 
@@ -89,6 +92,27 @@ meshadv_config = {
 }
 ```
 
+### SX1276 Direct Radio Configuration
+
+**Dragino LoRa/GPS HAT (AU 915 MHz):**
+```python
+dragino_config = {
+    "bus_id": 0,                          # SPI bus
+    "cs_id": 0,                           # SPI chip select (hardware CE not used)
+    "cs_pin": 25,                         # BCM 25 = wPi 6 = manual CS (GPIO, not hardware CE)
+    "reset_pin": 17,                      # BCM 17 = wPi 0 = RESET
+    "dio0_pin": 4,                        # BCM 4  = wPi 7 = DIO0 (TX/RX/CAD IRQ)
+    "dio1_pin": 23,                       # BCM 23 = wPi 4 = DIO1
+    "frequency": int(915.075 * 1000000),  # 915.075 MHz (AU Mid)
+    "tx_power": 17,                       # TX power (dBm, PA_BOOST)
+    "spreading_factor": 9,                # LoRa SF9 (AU Mid)
+    "bandwidth": int(125 * 1000),         # 125 kHz (AU Mid)
+    "coding_rate": 5,                     # LoRa CR 4/5 (AU Mid)
+    "preamble_length": 12,                # Preamble length
+    "sync_word": 0x34,                    # Sync word
+}
+```
+
 ### KISS TNC Configuration
 
 **KISS TNC (EU 869 MHz):**
@@ -115,6 +139,21 @@ python3 send_text_message.py --radio-type uconsole
 
 # Ping test with MeshAdv Mini
 python3 ping_repeater_trace.py --radio-type meshadv-mini
+```
+
+### SX1276 Direct Radio
+```bash
+# Send tracked advert with Dragino LoRa/GPS HAT
+python3 send_tracked_advert.py --radio-type dragino-lora-gps
+
+# Send text message via Dragino HAT
+python3 send_text_message.py --radio-type dragino-lora-gps
+
+# Monitor/packet sniff with Dragino HAT
+python3 monitor.py --radio-type dragino-lora-gps
+
+# Stream packets to Wireshark via Dragino HAT
+python3 wireshark_stream.py --radio-type dragino-lora-gps
 ```
 
 ### KISS TNC
@@ -150,6 +189,7 @@ Provides shared utilities for examples:
 - `waveshare`: Waveshare SX1262 HAT
 - `uconsole`: ClockworkPi uConsole LoRa
 - `meshadv-mini`: MeshAdviser Mini board
+- `dragino-lora-gps`: Dragino LoRa/GPS HAT (SX1276)
 - `kiss-tnc`: KISS TNC devices
 
 ## Requirements
@@ -159,6 +199,13 @@ Provides shared utilities for examples:
 - SPI interface enabled on Raspberry Pi
 - GPIO access for control pins
 - Python SPI libraries (`pip install spidev RPi.GPIO`)
+
+### For SX1276 Direct Radio (Dragino HAT):
+- Dragino LoRa/GPS HAT (SX1276) for Raspberry Pi
+- SPI interface enabled on Raspberry Pi
+- Manual CS pin toggling via GPIO (BCM 25) — hardware CE not used
+- Python dependencies: `pip install pymc_core[hardware]`
+- Optional gpiod support for non-Pi SBCs: `pip install pymc_core[gpiod]`
 
 ### For KISS TNC:
 - KISS-compatible TNC device (MeshTNC, etc.)
@@ -172,6 +219,15 @@ Provides shared utilities for examples:
 2. Check GPIO permissions: `sudo usermod -a -G gpio $USER`
 3. Verify wiring matches pin configuration in `common.py`
 4. Test SPI communication: `ls /dev/spi*`
+
+### SX1276 (Dragino HAT) Issues:
+1. Enable SPI: `sudo raspi-config` → Interface Options → SPI
+2. Check GPIO permissions: `sudo usermod -a -G gpio $USER`
+3. The Dragino HAT uses **manual CS toggling** on GPIO 25 (BCM) — the hardware CE0/CE1 pins are not connected
+4. If the HAT was previously powered, a full power cycle (not just reboot) may be needed to reset the SX1276 chip
+5. Verify chip detection: if `begin()` returns False, check wiring and try a complete power-off/power-on cycle
+6. Pin mapping (BCM numbering): CS=25, RESET=17, DIO0=4, DIO1=23
+7. GPS uses UART (BCM 14 TXD / 15 RXD) — configure via gpsd for NMEA data
 
 ### KISS TNC Issues:
 1. Check device connection: `ls /dev/tty*` or `ls /dev/cu.*`
