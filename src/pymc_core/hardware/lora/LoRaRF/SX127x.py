@@ -181,6 +181,7 @@ class SX127x(BaseLoRa):
     _irq = -1
     _txen = -1
     _rxen = -1
+    _cs_pin = -1  # manual chip-select GPIO (e.g. Dragino HAT uses GPIO6)
 
     # Internal state
     _spiSpeed = 8000000
@@ -193,32 +194,41 @@ class SX127x(BaseLoRa):
     # SPI helpers
     # ────────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _spi_write(address: int, data: int):
-        """Write a single byte to a register."""
+    def _cs_acquire(self):
+        if self._cs_pin >= 0 and _gpio_manager is not None:
+            _gpio_manager.set_pin_low(self._cs_pin)
+
+    def _cs_release(self):
+        if self._cs_pin >= 0 and _gpio_manager is not None:
+            _gpio_manager.set_pin_high(self._cs_pin)
+
+    def _spi_write(self, address: int, data: int):
         global spi
+        self._cs_acquire()
         spi.xfer2([address | 0x80, data])
+        self._cs_release()
 
-    @staticmethod
-    def _spi_read(address: int) -> int:
-        """Read a single byte from a register."""
+    def _spi_read(self, address: int) -> int:
         global spi
-        return spi.xfer2([address & 0x7F, 0x00])[1]
+        self._cs_acquire()
+        result = spi.xfer2([address & 0x7F, 0x00])[1]
+        self._cs_release()
+        return result
 
-    @staticmethod
-    def _spi_write_burst(address: int, data: list):
-        """Write multiple bytes starting at address."""
+    def _spi_write_burst(self, address: int, data: list):
         global spi
+        self._cs_acquire()
         spi.xfer2([address | 0x80] + list(data))
+        self._cs_release()
 
-    @staticmethod
-    def _spi_read_burst(address: int, length: int) -> list:
-        """Read multiple bytes starting at address."""
+    def _spi_read_burst(self, address: int, length: int) -> list:
         global spi
-        return spi.xfer2([address & 0x7F] + [0x00] * length)[1:]
+        self._cs_acquire()
+        result = spi.xfer2([address & 0x7F] + [0x00] * length)[1:]
+        self._cs_release()
+        return result
 
     def _write_bits(self, address: int, data: int, position: int, width: int):
-        """Write 'width' bits at 'position' in a register (read-modify-write)."""
         current = self._spi_read(address)
         mask = ((1 << width) - 1) << position
         value = (current & ~mask) | ((data << position) & mask)
@@ -284,8 +294,10 @@ class SX127x(BaseLoRa):
         spi.mode = 0
 
     def setManualCsPin(self, cs_pin: int):
-        """Store a GPIO pin used as manual chip-select (handled by wrapper)."""
+        """Store a GPIO pin used as manual chip-select and set it high (idle)."""
         self._cs_pin = cs_pin
+        if cs_pin >= 0 and _gpio_manager is not None:
+            _gpio_manager.setup_output_pin(cs_pin, initial_value=True)
 
     # ────────────────────────────────────────────────────────────────────────
     # Frequency
