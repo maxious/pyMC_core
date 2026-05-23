@@ -17,9 +17,9 @@ except ImportError:
     spi = None
 
 try:
-    import gpiod as _gpiod
+    from periphery import GPIO as _PeripheryGPIO
 except ImportError:
-    _gpiod = None
+    _PeripheryGPIO = None
 
 from ...signal_utils import snr_register_to_db
 from .base import BaseLoRa
@@ -187,6 +187,7 @@ class SX127x(BaseLoRa):
     _txen = -1
     _rxen = -1
     _cs_pin = -1  # manual chip-select GPIO (e.g. Dragino HAT uses GPIO6)
+    _raw_gpios = {}  # fallback periphery GPIO objects (used when _gpio_manager is None)
 
     # Internal state
     _spiSpeed = 8000000
@@ -200,38 +201,29 @@ class SX127x(BaseLoRa):
     # ────────────────────────────────────────────────────────────────────────
 
     def _init_raw_gpio(self):
-        if _gpiod is None:
+        if _PeripheryGPIO is None:
             return
-        if hasattr(self, "_raw_req"):
+        if self._raw_gpios:
             return
-        self._raw_chip = _gpiod.Chip("/dev/gpiochip0")
-        lines = {}
-        if self._reset >= 0:
-            lines[self._reset] = _gpiod.LineSettings(
-                direction=_gpiod.line.Direction.OUTPUT,
-                output_value=_gpiod.line.Value.ACTIVE,
-            )
-        if self._cs_pin >= 0:
-            lines[self._cs_pin] = _gpiod.LineSettings(
-                direction=_gpiod.line.Direction.OUTPUT,
-                output_value=_gpiod.line.Value.ACTIVE,
-            )
-        if lines:
-            self._raw_req = self._raw_chip.request_lines(
-                consumer="pymc_sx127x", config=lines
-            )
+        for pin_name in ("_reset", "_cs_pin", "_txen", "_rxen"):
+            pin = getattr(self, pin_name, -1)
+            if pin >= 0:
+                try:
+                    self._raw_gpios[pin] = _PeripheryGPIO(pin, "out")
+                except Exception:
+                    pass  # best-effort for fallback
 
     def _gpio_set_low(self, pin: int):
         if _gpio_manager is not None:
             _gpio_manager.set_pin_low(pin)
-        elif hasattr(self, "_raw_req"):
-            self._raw_req.set_value(pin, _gpiod.line.Value.INACTIVE)
+        elif pin in self._raw_gpios:
+            self._raw_gpios[pin].write(False)
 
     def _gpio_set_high(self, pin: int):
         if _gpio_manager is not None:
             _gpio_manager.set_pin_high(pin)
-        elif hasattr(self, "_raw_req"):
-            self._raw_req.set_value(pin, _gpiod.line.Value.ACTIVE)
+        elif pin in self._raw_gpios:
+            self._raw_gpios[pin].write(True)
 
     def _cs_acquire(self):
         if self._cs_pin >= 0:
@@ -303,7 +295,8 @@ class SX127x(BaseLoRa):
             return False
         if _gpio_manager is not None:
             _get_output(self._reset)
-        self._init_raw_gpio()
+        else:
+            self._init_raw_gpio()
         self._gpio_set_low(self._reset)
         time.sleep(0.001)
         self._gpio_set_high(self._reset)
@@ -347,7 +340,8 @@ class SX127x(BaseLoRa):
         if cs_pin >= 0:
             if _gpio_manager is not None:
                 _gpio_manager.setup_output_pin(cs_pin, initial_value=True)
-            self._init_raw_gpio()
+            else:
+                self._init_raw_gpio()
 
     # ────────────────────────────────────────────────────────────────────────
     # Frequency
