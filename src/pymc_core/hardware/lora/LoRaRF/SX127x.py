@@ -8,6 +8,7 @@ the same wiring / interrupt setup.
 """
 
 import time
+from typing import Optional
 
 try:
     import spidev
@@ -91,14 +92,23 @@ class SX127x(BaseLoRa):
     REG_FREQ_ERROR_LSB = 0x2A
     REG_DETECTION_OPTIMIZE = 0x31
     REG_INVERTIQ = 0x33
+    REG_HIGHBWOPTIMIZE1 = 0x36  # REG_LRTEST36 (ERRATA 2.1)
     REG_DETECTION_THRESHOLD = 0x37
     REG_SYNC_WORD = 0x39
+    REG_HIGHBWOPTIMIZE2 = 0x3A  # REG_LRTEST3A (ERRATA 2.1)
+    REG_INVERTIQ2 = 0x3B        # also REG_IMAGECAL in FSK mode
     REG_DIO_MAPPING_1 = 0x40
     REG_DIO_MAPPING_2 = 0x41
     REG_VERSION = 0x42
     REG_TCXO = 0x4B
     REG_PA_DAC = 0x4D
     REG_FORMER_TEMP = 0x5B
+    REG_IFFREQ1 = 0x2F          # REG_LRTEST2F (ERRATA 2.3)
+    REG_IFFREQ2 = 0x30          # REG_LRTEST30 (ERRATA 2.3)
+
+    # Image calibration bits (REG_IMAGECAL at 0x3B in FSK mode)
+    IMAGECAL_START = 0x40       # bit 6
+    IMAGECAL_RUNNING = 0x20     # bit 5
 
     # ── Operational modes (written to REG_OP_MODE bits 2-0) ─────────────────
     MODE_SLEEP = 0x00
@@ -195,6 +205,9 @@ class SX127x(BaseLoRa):
     _transmitTime = 0.0
     _statusWait = STATUS_DEFAULT
     _statusIrq = 0x00
+    _frequency = 0           # last set frequency in Hz (for errata/diagnostics)
+    _bw_cfg = 7              # last bandwidth config value (0-9, default 125kHz)
+    _mid_band_thresh = 525000000  # boundary between LF/HF bands (Hz)
 
     # ────────────────────────────────────────────────────────────────────────
     # SPI helpers
@@ -270,11 +283,17 @@ class SX127x(BaseLoRa):
     # ────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> bool:
-        """Initialise the chip: reset, exit sleep, verify version register."""
+        """Initialise the chip: reset, RX chain calibration, verify version."""
         if not self.reset():
             return False
         # After reset the chip is in SLEEP mode where SPI reads don't work.
-        # Write OP_MODE to exit sleep first.
+        # Enter FSK standby first (no LORA_MODEM bit) for IMAGECAL access.
+        # (REG_IMAGECAL at 0x3B is only functional in FSK mode — same address
+        #  as REG_INVERTIQ2 in LoRa mode.)
+        self._spi_write(self.REG_OP_MODE, self.MODE_STDBY)
+        time.sleep(0.01)
+        self._rx_chain_calibration()
+        # Switch to LoRa mode
         self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)
         time.sleep(0.01)
         # Verify the chip is alive by reading version
@@ -285,6 +304,35 @@ class SX127x(BaseLoRa):
                 return True
             time.sleep(0.01)
         return False
+
+    def _rx_chain_calibration(self):
+        """Rx chain calibration for LF and HF bands (Semtech reference).
+
+        Must be called soon after reset while still in FSK standby mode
+        so that REG_IMAGECAL (0x3B) is accessible.
+        """
+        # Calibrate LF band at current frequency
+        self._spi_write(self.REG_INVERTIQ2, self.IMAGECAL_START)
+        t0 = time.time()
+        while time.time() - t0 < 0.1:
+            if not (self._spi_read(self.REG_INVERTIQ2) & self.IMAGECAL_RUNNING):
+                break
+            time.sleep(0.001)
+        # Set a known HF frequency and calibrate HF band
+        self._write_frf(868000000)
+        self._spi_write(self.REG_INVERTIQ2, self.IMAGECAL_START)
+        t0 = time.time()
+        while time.time() - t0 < 0.1:
+            if not (self._spi_read(self.REG_INVERTIQ2) & self.IMAGECAL_RUNNING):
+                break
+            time.sleep(0.001)
+
+    def _write_frf(self, freq_hz: int):
+        """Write frequency registers without storing the value."""
+        frf = int((freq_hz << 19) / 32000000)
+        self._spi_write(self.REG_FRF_MSB, (frf >> 16) & 0xFF)
+        self._spi_write(self.REG_FRF_MID, (frf >> 8) & 0xFF)
+        self._spi_write(self.REG_FRF_LSB, frf & 0xFF)
 
     def end(self):
         """Put chip to sleep."""
@@ -349,10 +397,8 @@ class SX127x(BaseLoRa):
 
     def setFrequency(self, freq_hz: int):
         """Set centre frequency in Hz."""
-        frf = int((freq_hz << 19) / 32000000)
-        self._spi_write(self.REG_FRF_MSB, (frf >> 16) & 0xFF)
-        self._spi_write(self.REG_FRF_MID, (frf >> 8) & 0xFF)
-        self._spi_write(self.REG_FRF_LSB, frf & 0xFF)
+        self._frequency = freq_hz
+        self._write_frf(freq_hz)
 
     def setRfFrequency(self, rfFreq: int):
         """Compatibility alias for setFrequency (SX126x naming)."""
@@ -434,19 +480,30 @@ class SX127x(BaseLoRa):
     # Modulation parameters
     # ────────────────────────────────────────────────────────────────────────
 
-    def setLoRaModulation(self, sf: int, bw: int, cr: int, ldro: bool = False):
+    def setLoRaModulation(self, sf: int, bw: int, cr: int, ldro: Optional[bool] = None):
         """Configure LoRa modulation.
 
         Args:
             sf:  Spreading factor (6-12).
             bw:  Bandwidth in Hz (7800 - 500000).
             cr:  Coding rate denominator (5-8).
-            ldro: Low data rate optimisation.
+            ldro: Low data rate optimisation. None = auto-calculate.
         """
         self._set_spreading_factor(sf)
         self._set_bandwidth(bw)
         self._set_coding_rate(cr)
+        if ldro is None:
+            ldro = self._auto_ldro(sf)
         self._set_ldro(ldro)
+
+    @staticmethod
+    def _auto_ldro(sf: int, bw_cfg: int = 7) -> bool:
+        """Auto-calculate LDRO based on SF and BW (Semtech reference)."""
+        if bw_cfg == 7 and sf >= 11:   # 125 kHz + SF11/12
+            return True
+        if bw_cfg == 8 and sf == 12:   # 250 kHz + SF12
+            return True
+        return False
 
     def _set_spreading_factor(self, sf: int):
         if sf < 6:
@@ -468,12 +525,30 @@ class SX127x(BaseLoRa):
             31250: 4, 41700: 5, 62500: 6, 125000: 7,
             250000: 8, 500000: 9,
         }
-        bw_cfg = 9  # default 500 kHz
+        self._bw_cfg = 9  # default 500 kHz
         for key in sorted(bw_map.keys()):
             if bw_hz <= key:
-                bw_cfg = bw_map[key]
+                self._bw_cfg = bw_map[key]
                 break
-        self._write_bits(self.REG_MODEM_CONFIG_1, bw_cfg, 4, 4)
+        self._write_bits(self.REG_MODEM_CONFIG_1, self._bw_cfg, 4, 4)
+        # ERRATA 2.1: Sensitivity optimisation for 500 kHz bandwidth
+        self._apply_sensitivity_optimization()
+
+    def _apply_sensitivity_optimization(self):
+        """ERRATA 2.1: Sensitivity optimisation with a 500 kHz bandwidth.
+
+        Adjusts REG_HIGHBWOPTIMIZE1 (0x36) and REG_HIGHBWOPTIMIZE2 (0x3A)
+        based on bandwidth and frequency band.
+        """
+        if self._bw_cfg == 9:  # 500 kHz
+            if self._frequency >= self._mid_band_thresh:
+                self._spi_write(self.REG_HIGHBWOPTIMIZE1, 0x02)
+                self._spi_write(self.REG_HIGHBWOPTIMIZE2, 0x64)
+            else:
+                self._spi_write(self.REG_HIGHBWOPTIMIZE1, 0x02)
+                self._spi_write(self.REG_HIGHBWOPTIMIZE2, 0x7F)
+        else:
+            self._spi_write(self.REG_HIGHBWOPTIMIZE1, 0x03)
 
     def _set_coding_rate(self, cr: int):
         cr_cfg = max(4, min(cr, 8)) - 4
@@ -517,11 +592,12 @@ class SX127x(BaseLoRa):
     def _set_invert_iq(self, invert: int):
         if invert:
             self._write_bits(self.REG_INVERTIQ, 0x01, 0, 1)
-            self._write_bits(self.REG_INVERTIQ, 0x01, 6, 1)
-            self._spi_write(self.REG_INVERTIQ, 0x66)  # ensure bit 6 set
+            self._write_bits(self.REG_INVERTIQ, 0x00, 6, 1)  # TX off
+            self._spi_write(self.REG_INVERTIQ2, 0x19)         # IQ2 ON
         else:
             self._write_bits(self.REG_INVERTIQ, 0x00, 0, 1)
-            self._write_bits(self.REG_INVERTIQ, 0x00, 6, 1)
+            self._write_bits(self.REG_INVERTIQ, 0x01, 6, 1)  # TX off (default)
+            self._spi_write(self.REG_INVERTIQ2, 0x1D)         # IQ2 OFF (default)
 
     def setSyncWord(self, syncWord: int):
         """Set sync word (1 byte on SX127x)."""
@@ -771,20 +847,43 @@ class SX127x(BaseLoRa):
 
     def setCadParams(self, cadSymbolNum: int, cadDetPeak: int, cadDetMin: int, cadExitMode: int, cadTimeout: int):
         """Configure CAD parameters."""
-        # CAD symbol number is stored elsewhere; just store for reference
-        # Set detection thresholds
-        # cadDetPeak: 0-31, written to bits 7-3 of REG_DETECTION_OPTIMIZE? No, different register.
-        # SX127x uses REG_DETECTION_THRESHOLD for min and a separate approach.
-        # For now, just store in a special register-like way.
-        pass  # Thresholds handled by wrapper
+        # Write CAD symbol number to REG_DETECTION_OPTIMIZE bits 7-5
+        sym_map = {1: 0x00, 2: 0x20, 4: 0x40, 8: 0x60, 16: 0x80}
+        sym_bits = sym_map.get(cadSymbolNum, 0x00)
+        if cadExitMode:
+            sym_bits |= 0x10
+        self._write_bits(self.REG_DETECTION_OPTIMIZE, sym_bits >> 5, 5, 3)
+        self._write_bits(self.REG_DETECTION_OPTIMIZE, (sym_bits >> 4) & 1, 4, 1)
+        # Detection thresholds and timeout stored for wrapper use
 
     def setCad(self):
-        """Start Channel Activity Detection."""
-        # Map DIO0 to CAD_DONE
-        self._spi_write(self.REG_DIO_MAPPING_1, self.DIO0_CAD_DONE)
+        """Start Channel Activity Detection.
+
+        Maps DIO0 to CAD_DONE and enables CAD_DETECTED on DIO3.
+        """
+        # DIO0 = CAD_DONE (0x80), DIO3 = CAD_DETECTED (0x01)
+        mapping = self.DIO0_CAD_DONE | 0x01  # DIO3=01 (CadDetected)
+        self._spi_write(self.REG_DIO_MAPPING_1, mapping)
         self._statusWait = self.STATUS_CAD_WAIT
         self._statusIrq = 0x00
         self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_CAD)
+
+    def applyRfErrata(self):
+        """ERRATA 2.3: Spurious reception fix for LoRa RX.
+
+        Call before entering RX mode to reduce spurious signal detection.
+        Adjusts IFFREQ1/IFFREQ2 registers and detection optimise per BW.
+        """
+        if self._bw_cfg < 9:
+            self._write_bits(self.REG_DETECTION_OPTIMIZE, 0, 7, 1)  # clear bit 7
+            self._spi_write(self.REG_IFFREQ2, 0x00)
+            bw_fixes = {
+                0: 0x48, 1: 0x44, 2: 0x44, 3: 0x44,
+                4: 0x44, 5: 0x44, 6: 0x40, 7: 0x40, 8: 0x40,
+            }
+            self._spi_write(self.REG_IFFREQ1, bw_fixes.get(self._bw_cfg, 0x40))
+        else:
+            self._write_bits(self.REG_DETECTION_OPTIMIZE, 1, 7, 1)  # set bit 7
 
     # ────────────────────────────────────────────────────────────────────────
     # Misc compatibility stubs (wrappers may call these)

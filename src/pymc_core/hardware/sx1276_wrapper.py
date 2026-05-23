@@ -300,6 +300,7 @@ class SX1276Radio(LoRaRadio):
 
                             # Restore RX continuous mode
                             try:
+                                self.lora.applyRfErrata()
                                 self.lora.request(self.lora.RX_CONTINUOUS)
                                 await asyncio.sleep(self.RADIO_TIMING_DELAY)
                             except Exception as e:
@@ -429,7 +430,8 @@ class SX1276Radio(LoRaRadio):
             # Clear any pending IRQs
             self.lora.clearIrqStatus(0xFF)
 
-            # Start RX continuous
+            # Apply ERRATA 2.3 and start RX continuous
+            self.lora.applyRfErrata()
             self.lora.request(self.lora.RX_CONTINUOUS)
             time.sleep(self._RADIO_TIMING_DELAY)
 
@@ -583,6 +585,7 @@ class SX1276Radio(LoRaRadio):
                 self.lora.clearIrqStatus(0xFF)
                 self.lora.setStandby()
                 await asyncio.sleep(self.RADIO_TIMING_DELAY)
+                self.lora.applyRfErrata()
                 self.lora.request(self.lora.RX_CONTINUOUS)
                 await asyncio.sleep(self.RADIO_TIMING_DELAY)
                 self.lora.clearIrqStatus(0xFF)
@@ -850,6 +853,7 @@ class SX1276Radio(LoRaRadio):
                     0, 0, 0
                 )
                 self.lora.clearIrqStatus(0xFF)
+                self.lora.applyRfErrata()
                 self.lora.request(self.lora.RX_CONTINUOUS)
                 await asyncio.sleep(self.RADIO_TIMING_DELAY)
             except Exception as e:
