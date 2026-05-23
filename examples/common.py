@@ -287,19 +287,47 @@ def create_radio(
                 "coding_rate": 5,
                 "preamble_length": 17,
             },
+            "dragino-lora-gps": {
+                "bus_id": 0,
+                "cs_id": 0,
+                "cs_pin": 6,        # GPIO 6 = nSS/CS
+                "reset_pin": 0,     # GPIO 0 = RESET
+                "dio0_pin": 7,      # GPIO 7 = DIO0 (TX/RX/CAD IRQ)
+                "dio1_pin": 4,      # GPIO 4 = DIO1
+                "txen_pin": -1,     # RFM96W handles this internally
+                "rxen_pin": -1,
+                "frequency": int(869.525 * 1000000),  # EU: 869.525 MHz
+                "tx_power": 17,
+                "spreading_factor": 7,
+                "bandwidth": int(125 * 1000),
+                "coding_rate": 5,
+                "preamble_length": 12,
+                "sync_word": 0x34,  # SX127x uses 1-byte sync word
+            },
         }
+
+        # Determine which radio class to use
+        sx1276_types = {"dragino-lora-gps"}  # SX1276-based radio types
 
         if radio_type not in configs:
             raise ValueError(
                 f"Unknown radio type: {radio_type}. "
-                "Use 'waveshare', 'meshadv-mini', 'uconsole', 'kiss-tnc', "
-                "'kiss-modem', 'ch341', 'pymc_usb', or 'pymc_tcp'"
+                "Use 'waveshare', 'meshadv-mini', 'uconsole', 'dragino-lora-gps', "
+                "'kiss-tnc', 'kiss-modem', 'ch341', 'pymc_usb', or 'pymc_tcp'"
             )
 
         radio_kwargs = configs[radio_type]
         logger.debug(f"Radio configuration for {radio_type}: {radio_kwargs}")
-        radio = SX1262Radio(**radio_kwargs)
-        logger.info(f"SX1262 radio created for {radio_type}")
+
+        if radio_type in sx1276_types:
+            from pymc_core.hardware.sx1276_wrapper import SX1276Radio
+
+            radio = SX1276Radio(**radio_kwargs)
+            logger.info(f"SX1276 radio created for {radio_type}")
+        else:
+            radio = SX1262Radio(**radio_kwargs)
+            logger.info(f"SX1262 radio created for {radio_type}")
+
         logger.info(
             f"Frequency: {radio_kwargs['frequency']/1000000:.1f}MHz, TX Power: {radio_kwargs['tx_power']}dBm"
         )
