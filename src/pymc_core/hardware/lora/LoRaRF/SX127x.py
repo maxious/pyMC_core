@@ -16,6 +16,11 @@ try:
 except ImportError:
     spi = None
 
+try:
+    import gpiod as _gpiod
+except ImportError:
+    _gpiod = None
+
 from ...signal_utils import snr_register_to_db
 from .base import BaseLoRa
 
@@ -103,8 +108,8 @@ class SX127x(BaseLoRa):
     MODE_RX_SINGLE = 0x06
     MODE_CAD = 0x07
 
-    # For setPacketType emulation (SX127x uses MODEM_CONFIG_1 bit 0 for header)
-    LORA_MODEM = 0x01
+    # LongRangeMode bit (bit 7 of REG_OP_MODE) - must be set for LoRa operation
+    LORA_MODEM = 0x80
 
     # ── RX timeout values ────────────────────────────────────────────────────
     RX_SINGLE = 0x000000
@@ -194,13 +199,47 @@ class SX127x(BaseLoRa):
     # SPI helpers
     # ────────────────────────────────────────────────────────────────────────
 
+    def _init_raw_gpio(self):
+        if _gpiod is None:
+            return
+        if hasattr(self, "_raw_req"):
+            return
+        self._raw_chip = _gpiod.Chip("/dev/gpiochip0")
+        lines = {}
+        if self._reset >= 0:
+            lines[self._reset] = _gpiod.LineSettings(
+                direction=_gpiod.line.Direction.OUTPUT,
+                output_value=_gpiod.line.Value.ACTIVE,
+            )
+        if self._cs_pin >= 0:
+            lines[self._cs_pin] = _gpiod.LineSettings(
+                direction=_gpiod.line.Direction.OUTPUT,
+                output_value=_gpiod.line.Value.ACTIVE,
+            )
+        if lines:
+            self._raw_req = self._raw_chip.request_lines(
+                consumer="pymc_sx127x", config=lines
+            )
+
+    def _gpio_set_low(self, pin: int):
+        if _gpio_manager is not None:
+            _gpio_manager.set_pin_low(pin)
+        elif hasattr(self, "_raw_req"):
+            self._raw_req.set_value(pin, _gpiod.line.Value.INACTIVE)
+
+    def _gpio_set_high(self, pin: int):
+        if _gpio_manager is not None:
+            _gpio_manager.set_pin_high(pin)
+        elif hasattr(self, "_raw_req"):
+            self._raw_req.set_value(pin, _gpiod.line.Value.ACTIVE)
+
     def _cs_acquire(self):
-        if self._cs_pin >= 0 and _gpio_manager is not None:
-            _gpio_manager.set_pin_low(self._cs_pin)
+        if self._cs_pin >= 0:
+            self._gpio_set_low(self._cs_pin)
 
     def _cs_release(self):
-        if self._cs_pin >= 0 and _gpio_manager is not None:
-            _gpio_manager.set_pin_high(self._cs_pin)
+        if self._cs_pin >= 0:
+            self._gpio_set_high(self._cs_pin)
 
     def _spi_write(self, address: int, data: int):
         global spi
@@ -239,25 +278,35 @@ class SX127x(BaseLoRa):
     # ────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> bool:
-        """Initialise the chip: reset and verify version register."""
+        """Initialise the chip: reset, exit sleep, verify version register."""
         if not self.reset():
             return False
-        # Put into LoRa mode + standby
+        # After reset the chip is in SLEEP mode where SPI reads don't work.
+        # Write OP_MODE to exit sleep first.
         self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)
-        return True
+        time.sleep(0.01)
+        # Verify the chip is alive by reading version
+        t0 = time.time()
+        while time.time() - t0 < 1.0:
+            v = self._spi_read(self.REG_VERSION)
+            if v in (0x12, 0x22):
+                return True
+            time.sleep(0.01)
+        return False
 
     def end(self):
         """Put chip to sleep."""
         self.sleep()
 
     def reset(self) -> bool:
-        """Hardware reset via _reset pin."""
         if self._reset < 0:
             return False
-        _get_output(self._reset)
-        _gpio_manager.set_pin_low(self._reset)
+        if _gpio_manager is not None:
+            _get_output(self._reset)
+        self._init_raw_gpio()
+        self._gpio_set_low(self._reset)
         time.sleep(0.001)
-        _gpio_manager.set_pin_high(self._reset)
+        self._gpio_set_high(self._reset)
         time.sleep(0.005)
         # Wait for version register to stabilise
         t0 = time.time()
@@ -294,10 +343,11 @@ class SX127x(BaseLoRa):
         spi.mode = 0
 
     def setManualCsPin(self, cs_pin: int):
-        """Store a GPIO pin used as manual chip-select and set it high (idle)."""
         self._cs_pin = cs_pin
-        if cs_pin >= 0 and _gpio_manager is not None:
-            _gpio_manager.setup_output_pin(cs_pin, initial_value=True)
+        if cs_pin >= 0:
+            if _gpio_manager is not None:
+                _gpio_manager.setup_output_pin(cs_pin, initial_value=True)
+            self._init_raw_gpio()
 
     # ────────────────────────────────────────────────────────────────────────
     # Frequency
@@ -548,10 +598,9 @@ class SX127x(BaseLoRa):
         tx_base = self._spi_read(self.REG_FIFO_TX_BASE_ADDR)
         self._spi_write(self.REG_FIFO_ADDR_PTR, tx_base)
         self._payloadTxRx = 0
-        # Handle TXEN/RXEN pins if configured
         if self._txen >= 0 and self._rxen >= 0:
-            _gpio_manager.set_pin_high(self._txen)
-            _gpio_manager.set_pin_low(self._rxen)
+            self._gpio_set_high(self._txen)
+            self._gpio_set_low(self._rxen)
 
     def endPacket(self, timeout: int = 0) -> bool:
         """Finalise and start TX.
@@ -635,8 +684,8 @@ class SX127x(BaseLoRa):
 
         # Handle TXEN/RXEN pins
         if self._txen >= 0 and self._rxen >= 0:
-            _gpio_manager.set_pin_low(self._txen)
-            _gpio_manager.set_pin_high(self._rxen)
+            self._gpio_set_low(self._txen)
+            self._gpio_set_high(self._rxen)
 
         self._statusWait = self.STATUS_RX_WAIT
         self._statusIrq = 0x00

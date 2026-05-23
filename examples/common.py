@@ -290,10 +290,10 @@ def create_radio(
             "dragino-lora-gps": {
                 "bus_id": 0,
                 "cs_id": 0,
-                "cs_pin": 6,        # GPIO 6 = nSS/CS
-                "reset_pin": 0,     # GPIO 0 = RESET
-                "dio0_pin": 7,      # GPIO 7 = DIO0 (TX/RX/CAD IRQ)
-                "dio1_pin": 4,      # GPIO 4 = DIO1
+                "cs_pin": 25,       # BCM 25 = wPi 6 = nSS/CS
+                "reset_pin": 17,    # BCM 17 = wPi 0 = RESET
+                "dio0_pin": 4,      # BCM 4  = wPi 7 = DIO0 (TX/RX/CAD IRQ)
+                "dio1_pin": 23,     # BCM 23 = wPi 4 = DIO1
                 "txen_pin": -1,     # RFM96W handles this internally
                 "rxen_pin": -1,
                 "frequency": int(869.525 * 1000000),  # EU: 869.525 MHz
@@ -302,7 +302,7 @@ def create_radio(
                 "bandwidth": int(125 * 1000),
                 "coding_rate": 5,
                 "preamble_length": 12,
-                "sync_word": 0x34,  # SX127x uses 1-byte sync word
+                "sync_word": 0x34,
             },
         }
 
