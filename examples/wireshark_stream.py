@@ -39,17 +39,15 @@ class WiresharkHandler:
             print(f"Error handling packet: {e}")
 
 
-async def main(ip, port):
+async def main(ip, port, radio_type="waveshare"):
     print(f"Starting Wireshark stream to {ip}:{port}...")
     sock, dest = setup_wireshark_stream(ip, port)
     print("Sent PCAP global header")
 
-    # Create radio and dispatcher directly (no default handlers)
     from common import create_radio
-
     from pymc_core.node.dispatcher import Dispatcher
 
-    radio = create_radio("waveshare")
+    radio = create_radio(radio_type)
     radio.begin()
     print("Radio initialized")
 
@@ -71,7 +69,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stream mesh packets to Wireshark via UDP")
     parser.add_argument("--ip", required=True, help="Wireshark IP address")
     parser.add_argument("--port", type=int, required=True, help="Wireshark port")
+    parser.add_argument("--radio-type", default="waveshare",
+                        choices=["waveshare", "uconsole", "meshadv-mini", "dragino-lora-gps",
+                                 "kiss-tnc", "kiss-modem", "ch341", "pymc_usb", "pymc_tcp"])
 
     args = parser.parse_args()
 
-    asyncio.run(main(args.ip, args.port))
+    asyncio.run(main(args.ip, args.port, args.radio_type))
