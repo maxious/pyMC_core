@@ -294,13 +294,13 @@ def create_radio(
                 "reset_pin": 17,    # BCM 17 = wPi 0 = RESET
                 "dio0_pin": 4,      # BCM 4  = wPi 7 = DIO0 (TX/RX/CAD IRQ)
                 "dio1_pin": 23,     # BCM 23 = wPi 4 = DIO1
-                "txen_pin": -1,     # RFM96W handles this internally
+                "txen_pin": -1,
                 "rxen_pin": -1,
-                "frequency": int(869.525 * 1000000),  # EU: 869.525 MHz
+                "frequency": int(915.075 * 1000000),  # AU Mid: 915.075 MHz
                 "tx_power": 17,
-                "spreading_factor": 7,
-                "bandwidth": int(125 * 1000),
-                "coding_rate": 5,
+                "spreading_factor": 9,     # AU Mid: SF9
+                "bandwidth": int(125 * 1000),  # AU Mid: 125 kHz
+                "coding_rate": 5,          # AU Mid: CR 4/5
                 "preamble_length": 12,
                 "sync_word": 0x34,
             },
