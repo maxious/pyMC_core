@@ -88,82 +88,103 @@ class GPIOPinManager:
                 self._backend = "gpiod"
 
                 class GpiodGPIO:
+                    """gpiod v2 GPIO pin wrapper.
+
+                    Uses the modern gpiod API (Chip.request_lines / LineSettings).
+                    Maintains a shared line request per chip so multiple pins
+                    can be requested together.
+                    """
+
+                    _chip_obj: Optional[gpiod.Chip] = None
+                    _chip_path: str = ""
+                    _line_req: Optional[gpiod.LineRequest] = None
+                    _line_config: dict = {}
+                    _consumer: str = "pymc_core"
+
                     def __init__(self, chip_path, lineoffset, direction, bias=None, edge=None):
-                        # chip_path is like '/dev/gpiochip0' — use it directly
-                        try:
-                            self._chip = gpiod.Chip(chip_path)
-                        except Exception as e:
-                            raise FileNotFoundError(
-                                f"gpiod Chip '{chip_path}' not found: {e}"
-                            ) from e
-
-                        self._line = self._chip.get_line(lineoffset)
+                        self._offset = lineoffset
                         self.direction = direction
-                        self._consumer = "pymc_core"
+                        self._configured = False
 
-                        # Request line for input or output using libgpiod v2 LineRequest,
-                        # if available.
-                        requested = False
-                        try:
-                            LineRequest = getattr(gpiod, "LineRequest", None)
-                            if LineRequest is not None:
-                                req = LineRequest()
-                                if hasattr(req, "consumer"):
-                                    req.consumer = self._consumer
-                                if hasattr(req, "request_type"):
-                                    req.request_type = (
-                                        getattr(gpiod, "LINE_REQ_DIR_OUT", None)
-                                        if direction == "out"
-                                        else getattr(gpiod, "LINE_REQ_DIR_IN", None)
-                                    )
-                                try:
-                                    self._line.request(req)
-                                    requested = True
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+                        if chip_path != GpiodGPIO._chip_path:
+                            GpiodGPIO._chip_obj = None
+                            GpiodGPIO._chip_path = chip_path
+                            GpiodGPIO._line_req = None
+                            GpiodGPIO._line_config = {}
 
-                        if not requested:
+                        if GpiodGPIO._chip_obj is None:
                             try:
-                                req_type = (
-                                    getattr(gpiod, "LINE_REQ_DIR_OUT", None)
-                                    if direction == "out"
-                                    else getattr(gpiod, "LINE_REQ_DIR_IN", None)
-                                )
-                                if req_type is None:
-                                    req_type = 1 if direction == "out" else 0
-                                try:
-                                    self._line.request(consumer=self._consumer, type=req_type)
-                                    requested = True
-                                except Exception:
-                                    # try request with older API
-                                    try:
-                                        self._line.request(req_type)
-                                        requested = True
-                                    except Exception:
-                                        requested = False
-                            except Exception:
-                                requested = False
+                                GpiodGPIO._chip_obj = gpiod.Chip(chip_path)
+                            except Exception as e:
+                                raise FileNotFoundError(
+                                    f"gpiod Chip '{chip_path}' not found: {e}"
+                                ) from e
 
-                        if not requested:
-                            raise RuntimeError(
-                                "Unsupported gpiod Python API on this system. "
-                                "Please install a compatible python-libgpiod (v2.4) "
-                                "or adjust the wrapper."
+                        # Build line settings for this pin
+                        dir_map = {
+                            "out": gpiod.line.Direction.OUTPUT,
+                            "in": gpiod.line.Direction.INPUT,
+                        }
+                        direction_value = dir_map.get(direction, gpiod.line.Direction.INPUT)
+                        settings = gpiod.LineSettings(direction=direction_value)
+
+                        if edge is not None:
+                            edge_map = {
+                                "rising": gpiod.line.Edge.RISING,
+                                "falling": gpiod.line.Edge.FALLING,
+                                "both": gpiod.line.Edge.BOTH,
+                            }
+                            edge_val = edge_map.get(edge)
+                            if edge_val is not None:
+                                settings = gpiod.LineSettings(
+                                    direction=direction_value, edge_detection=edge_val
+                                )
+
+                        if direction == "out":
+                            settings.output_value = gpiod.line.Value.ACTIVE
+
+                        GpiodGPIO._line_config[lineoffset] = settings
+                        self._configured = True
+
+                        # Rebuild the shared line request
+                        self._rebuild_request()
+
+                    @classmethod
+                    def _rebuild_request(cls):
+                        if cls._chip_obj is None or not cls._line_config:
+                            return
+                        # Release old request if any
+                        if cls._line_req is not None:
+                            try:
+                                cls._line_req.release()
+                            except Exception:
+                                pass
+                        try:
+                            cls._line_req = cls._chip_obj.request_lines(
+                                consumer=cls._consumer, config=cls._line_config
                             )
+                        except Exception:
+                            cls._line_req = None
 
                     def write(self, value: bool):
-                        self._line.set_value(1 if value else 0)
+                        if GpiodGPIO._line_req is not None:
+                            v = gpiod.line.Value.ACTIVE if value else gpiod.line.Value.INACTIVE
+                            GpiodGPIO._line_req.set_value(self._offset, v)
 
                     def read(self) -> bool:
-                        return bool(self._line.get_value())
+                        if GpiodGPIO._line_req is not None:
+                            try:
+                                return bool(GpiodGPIO._line_req.get_value(self._offset).value)
+                            except Exception:
+                                pass
+                        return False
 
                     def close(self):
-                        try:
-                            self._line.release()
-                        except Exception:
-                            pass
+                        GpiodGPIO._line_config.pop(self._offset, None)
+                        self._rebuild_request()
+                        if not GpiodGPIO._line_config:
+                            GpiodGPIO._chip_obj = None
+                            GpiodGPIO._chip_path = ""
 
                     def poll(self, timeout):
                         return False
@@ -171,8 +192,6 @@ class GPIOPinManager:
                     def read_event(self):
                         return None
 
-                # Make the module-level GPIO name point to the wrapper so the rest of the
-                # code can instantiate it.
                 globals()["GPIO"] = GpiodGPIO
             else:
                 raise GPIOImportError()
