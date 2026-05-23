@@ -381,7 +381,7 @@ def main():
     )
     parser.add_argument(
         "--radio-type",
-        choices=["waveshare", "uconsole", "meshadv-mini", "kiss-tnc", "kiss-modem"],
+        choices=["waveshare", "uconsole", "meshadv-mini", "dragino-lora-gps", "kiss-tnc", "kiss-modem"],
         default="waveshare",
         help="Radio hardware type (default: waveshare)",
     )

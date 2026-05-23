@@ -304,7 +304,7 @@ def main():
     parser = argparse.ArgumentParser(description="CAD Calibration Tool with Staged Workflow")
     parser.add_argument(
         "--radio",
-        choices=["waveshare", "uconsole", "meshadv-mini", "kiss-tnc", "kiss-modem"],
+        choices=["waveshare", "uconsole", "meshadv-mini", "dragino-lora-gps", "kiss-tnc", "kiss-modem"],
         default="waveshare",
         help="Radio type",
     )

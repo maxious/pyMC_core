@@ -93,7 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description="Send a location-tracked advertisement")
     parser.add_argument(
         "--radio-type",
-        choices=["waveshare", "uconsole", "meshadv-mini", "kiss-tnc", "kiss-modem", "ch341"],
+        choices=["waveshare", "uconsole", "meshadv-mini", "dragino-lora-gps", "kiss-tnc", "kiss-modem", "ch341"],
         default="waveshare",
         help="Radio hardware type (default: waveshare)",
     )
