@@ -1,14 +1,16 @@
-"""CRC-16 single-bit error correction using backward-walk algorithm.
+"""CRC-16 single-bit error correction and SX1276/MeshCore CRC utilities.
+
+CRC Algorithms:
+  - sx1276_crc16():  CCITT (poly=0x1021, seed=0x1D0F, inverted)  — SX1276 hardware
+  - crc16_xmodem():   XMODEM (poly=0x1021, init=0, reflected=False)
+  - crc16_verify():   backward-walk-compatible verification CRC
+  - crc16_correct_single_bit(): error correction using backward walk
 
 Usage:
   1. Compute CRC over data via crc16_xmodem(data)
   2. Append CRC to data as raw bytes (MSB first)
   3. Receiver runs crc16_verify(full_packet) — should be 0
   4. If non-zero, crc16_correct_single_bit(full_packet) finds and flips the error
-
-Two CRC directions are used intentionally:
-  - crc16_xmodem() for checksum generation (standard XMODEM CRC-16)
-  - crc16_verify() for verification + error correction via backward walk
 """
 
 
@@ -20,6 +22,31 @@ def crc16_xmodem(data: bytes) -> int:
         for _ in range(8):
             crc = ((crc << 1) & 0xFFFF) ^ 0x1021 if crc & 0x8000 else (crc << 1) & 0xFFFF
     return crc & 0xFFFF
+
+
+def sx1276_crc16(data: bytes, crc_type: int = 0) -> int:
+    """Compute SX1276/MeshCore CRC-16 (CCITT or IBM).
+
+    Args:
+        data: Buffer to compute CRC over.
+        crc_type: 0 = CCITT (poly=0x1021, seed=0x1D0F, inverted),
+                  1 = IBM   (poly=0x8005, seed=0xFFFF, direct).
+
+    This matches the MeshCore firmware's RadioPacketComputeCrc() and
+    the SX1276 hardware CRC computation.
+    """
+    polynomial = 0x8005 if crc_type else 0x1021
+    crc = 0xFFFF if crc_type else 0x1D0F
+
+    for byte in data:
+        for _ in range(8):
+            if ((crc >> 8) & 0x80) ^ (byte & 0x80):
+                crc = ((crc << 1) ^ polynomial) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+            byte <<= 1
+
+    return crc if crc_type else (~crc) & 0xFFFF
 
 
 def _crc_forward(crc: int, bit: int) -> int:
