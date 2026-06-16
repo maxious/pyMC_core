@@ -283,24 +283,49 @@ class SX127x(BaseLoRa):
     # ────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> bool:
-        """Initialise the chip: reset, RX chain calibration, verify version."""
+        """Initialise the chip: reset, RX chain calibration, verify version.
+
+        RadioLib erratum: after a cold power-up the SX127x crystal oscillator
+        needs ~2-5 ms to stabilise.  If NRESET is not pulsed long enough (or
+        is tied to board power-enable) the first SPI transactions race the
+        crystal and produce silent register-write failures — OpMode, PaConfig,
+        ModemConfig1/2 are common victims.
+
+        Workaround: pre-warm the crystal by stepping FSK SLEEP -> LoRa SLEEP
+        (5 ms) -> LoRa STDBY BEFORE any other register writes.  Also, the
+        SX1276 datasheet §3.1.1 requires going through SLEEP when switching
+        between FSK and LoRa modem — direct STDBY->STDBY switch is illegal.
+        (RadioLib PR #1760 / SX1278 datasheet §5.4.8 / AN1200.24)
+        """
         if not self.reset():
             return False
-        # After reset the chip is in SLEEP mode where SPI reads don't work.
-        # Enter FSK standby first (no LORA_MODEM bit) for IMAGECAL access.
-        # (REG_IMAGECAL at 0x3B is only functional in FSK mode — same address
-        #  as REG_INVERTIQ2 in LoRa mode.)
-        self._spi_write(self.REG_OP_MODE, self.MODE_STDBY)
-        time.sleep(0.01)
+        # ── Crystal pre-warm + FSK→LoRa transition through SLEEP ──────
+        # After reset the chip is in FSK SLEEP (OpMode ≈ 0x01 or 0x09).
+        # Step via LoRa SLEEP to warm the crystal:
+        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_SLEEP)  # LoRa SLEEP
+        time.sleep(0.005)   # crystal warm-up (5 ms)
+        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)  # LoRa STDBY
+        time.sleep(0.001)
+        # ── RX chain calibration (must run in FSK STDBY) ──────────────
+        # Switch back to FSK through SLEEP (datasheet §3.1.1)
+        self._spi_write(self.REG_OP_MODE, self.MODE_SLEEP)  # FSK SLEEP
+        time.sleep(0.001)
+        self._spi_write(self.REG_OP_MODE, self.MODE_STDBY)  # FSK STDBY
+        time.sleep(0.001)
         self._rx_chain_calibration()
-        # Switch to LoRa mode
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)
-        time.sleep(0.01)
-        # Verify the chip is alive by reading version
+        # ── Enter LoRa standby for normal operation ───────────────────
+        self._spi_write(self.REG_OP_MODE, self.MODE_SLEEP)  # FSK SLEEP
+        time.sleep(0.001)
+        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_SLEEP)  # LoRa SLEEP
+        time.sleep(0.001)
+        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)  # LoRa STDBY
+        time.sleep(0.001)
+        # ── Verify the chip is alive by reading version ───────────────
         t0 = time.time()
         while time.time() - t0 < 1.0:
             v = self._spi_read(self.REG_VERSION)
             if v in (0x12, 0x22):
+                self._is_lora = True
                 return True
             time.sleep(0.01)
         return False
@@ -359,17 +384,19 @@ class SX127x(BaseLoRa):
         return False
 
     def sleep(self):
-        """Enter sleep mode (lowest power)."""
-        # preserve LoRa modem bit
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_SLEEP)
+        """Enter sleep mode (lowest power) — preserves LongRangeMode bit."""
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | self.MODE_SLEEP)
 
     def wake(self):
-        """Wake from sleep by entering standby."""
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)
+        """Wake from sleep by entering standby — preserves LongRangeMode bit."""
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | self.MODE_STDBY)
 
     def setStandby(self, mode: int = 0x00):
-        """Enter standby mode. 'mode' is ignored on SX127x (always STDBY)."""
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_STDBY)
+        """Enter standby mode — preserves LongRangeMode bit. 'mode' ignored."""
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | self.MODE_STDBY)
 
     # ────────────────────────────────────────────────────────────────────────
     # SPI / pin config (called by wrapper before begin())
@@ -693,7 +720,8 @@ class SX127x(BaseLoRa):
         self._spi_write(self.REG_DIO_MAPPING_1, self.DIO0_TX_DONE)
 
         # Enter TX mode
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_TX)
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | self.MODE_TX)
         self._transmitTime = time.time()
         return True
 
@@ -777,8 +805,9 @@ class SX127x(BaseLoRa):
         # Map DIO0 to RX_DONE
         self._spi_write(self.REG_DIO_MAPPING_1, self.DIO0_RX_DONE)
 
-        # Enter RX mode
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | rxMode)
+        # Enter RX mode (preserve LongRangeMode bit)
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | rxMode)
         return True
 
     def available(self) -> int:
@@ -866,7 +895,8 @@ class SX127x(BaseLoRa):
         self._spi_write(self.REG_DIO_MAPPING_1, mapping)
         self._statusWait = self.STATUS_CAD_WAIT
         self._statusIrq = 0x00
-        self._spi_write(self.REG_OP_MODE, self.LORA_MODEM | self.MODE_CAD)
+        current = self._spi_read(self.REG_OP_MODE)
+        self._spi_write(self.REG_OP_MODE, (current & 0xF8) | self.MODE_CAD)
 
     def applyRfErrata(self):
         """ERRATA 2.3: Spurious reception fix for LoRa RX.

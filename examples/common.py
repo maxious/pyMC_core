@@ -302,7 +302,7 @@ def create_radio(
                 "bandwidth": int(125 * 1000),  # AU Mid: 125 kHz
                 "coding_rate": 5,          # AU Mid: CR 4/5
                 "preamble_length": 12,
-                "sync_word": 0x34,
+                "sync_word": 0x12,
             },
         }
 
@@ -342,11 +342,41 @@ def create_radio(
         raise
 
 
+def _get_pi_serial_seed() -> bytes:
+    """Derive a deterministic 32-byte seed from the Raspberry Pi serial number.
+
+    Returns:
+        32-byte SHA-256 hash of the Pi serial, or None if not on a Pi.
+    """
+    import hashlib
+
+    sources = [
+        "/proc/cpuinfo",
+        "/sys/firmware/devicetree/base/serial-number",
+        "/etc/machine-id",
+    ]
+    for path in sources:
+        try:
+            with open(path) as f:
+                content = f.read().strip()
+            if "cpuinfo" in path:
+                for line in content.split("\n"):
+                    if line.startswith("Serial"):
+                        content = line.split(":")[1].strip()
+                        break
+            if content and content != "0000000000000000":
+                return hashlib.sha256(content.encode()).digest()
+        except (IOError, OSError):
+            continue
+    return None
+
+
 def create_mesh_node(
     node_name: str = "ExampleNode",
     radio_type: str = "waveshare",
     serial_port: str = "/dev/ttyUSB0",
     use_modem_identity: bool = False,
+    persistent: bool = False,
 ) -> tuple[MeshNode, LocalIdentity]:
     """Create a mesh node with radio.
 
@@ -359,6 +389,8 @@ def create_mesh_node(
         use_modem_identity: If True and radio_type is "kiss-modem", use the modem's
                            cryptographic identity instead of generating a local one.
                            This keeps the private key secure on the modem hardware.
+        persistent: If True, derive identity from device serial number / machine-id
+                    so the node keeps the same public key across restarts.
 
     Returns:
         Tuple of (MeshNode, Identity) - Identity may be LocalIdentity or ModemIdentity
@@ -422,8 +454,12 @@ def create_mesh_node(
             print(f"Using modem identity (private key secured on modem)")
         else:
             logger.debug("Creating LocalIdentity...")
-            identity = LocalIdentity()
-            logger.info(f"Created local identity: {identity.get_public_key().hex()[:16]}...")
+            seed = _get_pi_serial_seed() if persistent else None
+            identity = LocalIdentity(seed=seed)
+            if seed:
+                logger.info(f"Created persistent identity: {identity.get_public_key().hex()[:16]}... (from device serial)")
+            else:
+                logger.info(f"Created local identity: {identity.get_public_key().hex()[:16]}...")
 
         # Create a mesh node with the radio and identity
         config = {"node": {"name": node_name}}
