@@ -313,6 +313,18 @@ class SX1276Radio(LoRaRadio):
 
                     except asyncio.TimeoutError:
                         rx_check_count += 1
+                        # SPI polling fallback: DIO0 edge detection can fail if
+                        # the pin is stuck HIGH from a spurious init assertion.
+                        # Poll IRQ flags directly via SPI as a safety net.
+                        try:
+                            if self.lora and self._initialized:
+                                irq = self.lora.getIrqStatus()
+                                if irq:
+                                    logger.debug(f"[RX] RX via SPI poll (IRQ=0x{irq:02X})")
+                                    self._last_irq_status = irq
+                                    self._rx_done_event.set()
+                        except Exception:
+                            pass
                         self._sample_noise_floor()
                         if rx_check_count % 500 == 0:
                             logger.debug(
@@ -432,6 +444,13 @@ class SX1276Radio(LoRaRadio):
 
             # Apply ERRATA 2.3 and start RX continuous
             self.lora.applyRfErrata()
+            self.lora.request(self.lora.RX_CONTINUOUS)
+            time.sleep(self._RADIO_TIMING_DELAY)
+
+            # Ensure DIO0 is LOW — spurious assertion during init can leave
+            # it HIGH permanently, breaking edge-triggered interrupt detection.
+            # An extra IRQ clear + RX re-entry flushes any stuck state.
+            self.lora.clearIrqStatus(0xFF)
             self.lora.request(self.lora.RX_CONTINUOUS)
             time.sleep(self._RADIO_TIMING_DELAY)
 
