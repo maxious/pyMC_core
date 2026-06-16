@@ -555,7 +555,10 @@ class SX127x(BaseLoRa):
         if sf == 6:
             optimize = 0x05
             threshold = 0x0C
-        self._spi_write(self.REG_DETECTION_OPTIMIZE, optimize)
+        # Use write_bits to preserve silicon-default upper bits (e.g. 0xC0),
+        # which are clobbered by direct _spi_write. RadioLib's SX1276.cpp
+        # never writes to this register at all, relying on silicon defaults.
+        self._write_bits(self.REG_DETECTION_OPTIMIZE, optimize, 0, 3)
         self._spi_write(self.REG_DETECTION_THRESHOLD, threshold)
         self._write_bits(self.REG_MODEM_CONFIG_2, sf, 4, 4)
 
