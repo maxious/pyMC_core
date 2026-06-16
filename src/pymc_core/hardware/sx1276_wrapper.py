@@ -439,6 +439,10 @@ class SX1276Radio(LoRaRadio):
                 0, 0, 0
             )
 
+            # Snapshot IRQ state BEFORE clearing — preserves any packet already
+            # received and waiting in the FIFO (DIO0 solidly lit = packet ready).
+            _pre_clear_irq = self.lora.getIrqStatus()
+
             # Clear any pending IRQs
             self.lora.clearIrqStatus(0xFF)
 
@@ -483,6 +487,16 @@ class SX1276Radio(LoRaRadio):
                             return True
                         self._rx_irq_task = loop.create_task(self._rx_irq_background_task())
                         logger.debug("[RX] Background task started")
+
+                        # If a packet was already waiting in the FIFO before we
+                        # cleared IRQ flags, feed it to the background task now.
+                        if _pre_clear_irq & self.lora.IRQ_RX_DONE:
+                            logger.info(
+                                "[RX] Packet already in FIFO at init (IRQ=0x%02X)",
+                                _pre_clear_irq,
+                            )
+                            self._last_irq_status = _pre_clear_irq
+                            self._rx_done_event.set()
             except Exception as e:
                 logger.warning(f"Failed to start RX task: {e}")
 
