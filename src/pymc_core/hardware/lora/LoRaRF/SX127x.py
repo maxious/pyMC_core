@@ -59,6 +59,9 @@ def _get_input(pin):
 class SX127x(BaseLoRa):
     """Class for SX1276/77/78/79 LoRa chipsets from Semtech (also HopeRF RFM92/95/96/98)."""
 
+    # Set to True for RadioLib-style SPI transaction logging
+    DEBUG_SPI = False
+
     # ── Register addresses (LoRa mode) ──────────────────────────────────────
     REG_FIFO = 0x00
     REG_OP_MODE = 0x01
@@ -248,6 +251,8 @@ class SX127x(BaseLoRa):
 
     def _spi_write(self, address: int, data: int):
         global spi
+        if self.DEBUG_SPI:
+            print(f"[SPI W] 0x{address:02X} ← 0x{data:02X}")
         self._cs_acquire()
         spi.xfer2([address | 0x80, data])
         self._cs_release()
@@ -257,10 +262,14 @@ class SX127x(BaseLoRa):
         self._cs_acquire()
         result = spi.xfer2([address & 0x7F, 0x00])[1]
         self._cs_release()
+        if self.DEBUG_SPI:
+            print(f"[SPI R] 0x{address:02X} → 0x{result:02X}")
         return result
 
     def _spi_write_burst(self, address: int, data: list):
         global spi
+        if self.DEBUG_SPI:
+            print(f"[SPI WB] 0x{address:02X} ← {len(data)} bytes: {[hex(b) for b in data[:8]]}")
         self._cs_acquire()
         spi.xfer2([address | 0x80] + list(data))
         self._cs_release()
@@ -270,12 +279,16 @@ class SX127x(BaseLoRa):
         self._cs_acquire()
         result = spi.xfer2([address & 0x7F] + [0x00] * length)[1:]
         self._cs_release()
+        if self.DEBUG_SPI:
+            print(f"[SPI RB] 0x{address:02X} → {[hex(b) for b in result[:8]]}")
         return result
 
     def _write_bits(self, address: int, data: int, position: int, width: int):
         current = self._spi_read(address)
         mask = ((1 << width) - 1) << position
         value = (current & ~mask) | ((data << position) & mask)
+        if self.DEBUG_SPI:
+            print(f"[SPI B] 0x{address:02X} [{position+width-1}:{position}] ← 0x{data:X} (0x{current:02X} → 0x{value:02X})")
         self._spi_write(address, value)
 
     # ────────────────────────────────────────────────────────────────────────
