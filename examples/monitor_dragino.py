@@ -66,8 +66,9 @@ async def main():
             fixed = try_recovery(data)
             if fixed:
                 line = f"[{ts}] FIX #{crc_fail_count}→#{fixed_count} {len(fixed)}b: {fixed[:40].hex()}"
+                data = fixed  # Log corrected version below
             else:
-                line = f"[{ts}] BAD #{crc_fail_count} {len(data)}b (CRC fail)"
+                line = f"[{ts}] BAD #{crc_fail_count} {len(data)}b: {data.hex()}"
 
         with open(OUT_PATH, "a") as f:
             f.write(line + "\n")
