@@ -261,6 +261,12 @@ class SX1276Radio(LoRaRadio):
                                         "[RX] CRC error #%d - RSSI=%ddBm, SNR=%.1fdB, Length=%d",
                                         self.crc_error_count, int(rssi_dbm), snr_db, length,
                                     )
+                                    # CRC-failed data is still in the FIFO — read it
+                                    # so callbacks can attempt recovery or logging.
+                                    if length > 0 and self.rx_callback:
+                                        buffer = self.lora.readBuffer(ptr, length)
+                                        packet_data = bytes(buffer)
+                                        self.rx_callback(packet_data)
                                 except Exception:
                                     logger.warning("[RX] CRC error #%d", self.crc_error_count)
 
