@@ -266,7 +266,7 @@ class SX1276Radio(LoRaRadio):
                                     if length > 0 and self.rx_callback:
                                         buffer = self.lora.readBuffer(ptr, length)
                                         packet_data = bytes(buffer)
-                                        self.rx_callback(packet_data)
+                                        self.rx_callback(packet_data, crc_ok=False)
                                 except Exception:
                                     logger.warning("[RX] CRC error #%d", self.crc_error_count)
 
@@ -293,7 +293,7 @@ class SX1276Radio(LoRaRadio):
                                     )
                                     if self.rx_callback:
                                         try:
-                                            self.rx_callback(packet_data)
+                                            self.rx_callback(packet_data, crc_ok=True)
                                         except Exception as cb_exc:
                                             logger.error(f"RX callback error: {cb_exc}")
                                     else:

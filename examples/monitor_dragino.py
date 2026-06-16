@@ -53,10 +53,9 @@ async def main():
     r._event_loop = loop
     task = loop.create_task(r._rx_irq_background_task())
 
-    def on_packet(data: bytes):
+    def on_packet(data: bytes, crc_ok: bool = True):
         global good_count, crc_fail_count
         ts = time.strftime("%H:%M:%S")
-        crc_ok = crc16_verify(data) == 0
 
         if crc_ok:
             good_count += 1
